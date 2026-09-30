@@ -16,7 +16,7 @@ const SECTION_COLORS: Record<Section, string> = {
   projects: 'green',
   apps: 'cyan',
   background: 'blue',
-  macos: 'gray',
+  system: 'gray',
   other: 'gray',
 }
 

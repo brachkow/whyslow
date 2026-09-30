@@ -1,36 +1,42 @@
 import { describe, expect, it } from 'vitest'
 
 import { byCpu } from './analyze'
-import { appOf, arrangeSections, buildGroups, shortCommand } from './origin'
+import { arrangeSections, buildGroups, shortCommand } from './origin'
 import type { OriginInput } from './origin'
+import { buildDarwinServices, darwinRules } from './platform/darwin'
+import type { LaunchdPlist } from './platform/darwin'
 import { makeAnalyzed, MY_UID } from './test-factories'
-import type { AnalyzedProcess, LaunchdPlist, ProcessGroup } from './types'
+import type { AnalyzedProcess, ProcessGroup } from './types'
 
 const HOME = '/Users/me'
 
 const launchd = makeAnalyzed({ pid: 1, ppid: 0, uid: 0, command: '/sbin/launchd', name: 'launchd', stat: 'Ss' })
 
-const makeInput = (processes: AnalyzedProcess[], overrides: Partial<OriginInput> = {}): OriginInput => ({
+type Launchd = { jobs?: Map<number, string>, plists?: LaunchdPlist[] }
+
+// Origins are exercised with the macOS rules; launchd jobs and plists become services like on a real Mac
+const makeInput = (processes: AnalyzedProcess[], overrides: Partial<OriginInput> = {}, { jobs = new Map(), plists = [] }: Launchd = {}): OriginInput => ({
   processes: [launchd, ...processes],
   myUid: MY_UID,
   home: HOME,
-  launchdJobs: new Map(),
-  plists: [],
+  services: buildDarwinServices(processes, jobs, plists),
+  adopterPids: new Set([1]),
   cwds: new Map(),
   projectRoots: new Map(),
   ports: new Map(),
+  rules: darwinRules,
   ...overrides,
 })
 
 const groupOf = (groups: ProcessGroup[], pid: number) =>
   groups.find(group => group.processes.some(process => process.pid === pid))
 
-const getGroup = (processes: AnalyzedProcess[], pid: number, overrides?: Partial<OriginInput>) =>
-  groupOf(buildGroups(makeInput(processes, overrides)), pid)
+const getGroup = (processes: AnalyzedProcess[], pid: number, overrides?: Partial<OriginInput>, launchdState?: Launchd) =>
+  groupOf(buildGroups(makeInput(processes, overrides, launchdState)), pid)
 
 const makeGroup = (overrides: Partial<ProcessGroup>): ProcessGroup => ({
   id: 'id',
-  section: 'macos',
+  section: 'system',
   title: 'title',
   why: '',
   location: null,
@@ -41,21 +47,6 @@ const makeGroup = (overrides: Partial<ProcessGroup>): ProcessGroup => ({
   ports: [],
   flags: [],
   ...overrides,
-})
-
-describe('appOf', () => {
-  it.each([
-    ['/Applications/Firefox.app/Contents/MacOS/firefox', 'Firefox'],
-    ['/Applications/Google Chrome.app/Contents/Frameworks/Helper.app/Contents/MacOS/Helper', 'Google Chrome'],
-    ['/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal', 'Terminal'],
-    ['/System/Applications/Mail.app/Contents/MacOS/Mail', 'Mail'],
-  ])('finds the outermost app in %s', (command, expected) => {
-    expect(appOf(command)).toBe(expected)
-  })
-
-  it('ignores bundles outside Applications folders', () => {
-    expect(appOf('/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock')).toBeNull()
-  })
 })
 
 describe('shortCommand', () => {
@@ -112,7 +103,7 @@ describe('apps', () => {
     const sim = makeAnalyzed({ pid: 10, ppid: 1, name: 'launchd_sim', command: 'launchd_sim' })
     const springboard = makeAnalyzed({ pid: 11, ppid: 10, command: '/Library/Developer/CoreSimulator/Volumes/iOS/RuntimeRoot/Applications/MobileSafari.app/MobileSafari' })
 
-    expect(getGroup([sim, springboard], 11)?.id).toBe('simulator')
+    expect(getGroup([sim, springboard], 11)?.id).toBe('app:iOS Simulator')
   })
 })
 
@@ -189,13 +180,13 @@ describe('background', () => {
   it('explains root helpers by their LaunchDaemon plist', () => {
     const daemon = makeAnalyzed({ pid: 30, ppid: 1, uid: 0, command: '/opt/vendor/syncd', name: 'syncd' })
 
-    expect(getGroup([daemon], 30, { plists: [plist] })?.why).toBe('LaunchDaemon com.vendor.sync, starts at boot/login')
+    expect(getGroup([daemon], 30, {}, { plists: [plist] })?.why).toBe('LaunchDaemon com.vendor.sync, starts at boot/login')
   })
 
   it('names third-party launchd jobs without a plist', () => {
     const agent = makeAnalyzed({ pid: 30, ppid: 1, stat: 'Ss', command: '/opt/tool/agent' })
 
-    expect(getGroup([agent], 30, { launchdJobs: new Map([[30, 'dev.tool.agent']]) })?.why).toBe('launchd job dev.tool.agent')
+    expect(getGroup([agent], 30, {}, { jobs: new Map([[30, 'dev.tool.agent']]) })?.why).toBe('launchd job dev.tool.agent')
   })
 
   it('recognizes processes that daemonized themselves', () => {
@@ -211,7 +202,7 @@ describe('background', () => {
   })
 })
 
-describe('macOS', () => {
+describe('system', () => {
   it('uses the built-in description', () => {
     const spotlight = makeAnalyzed({ pid: 40, ppid: 1, uid: 0, name: 'mds_stores', command: '/System/Library/Frameworks/CoreServices.framework/mds_stores' })
 
@@ -221,7 +212,7 @@ describe('macOS', () => {
   it('falls back to the launchd label', () => {
     const service = makeAnalyzed({ pid: 40, ppid: 1, name: 'biomed', command: '/usr/libexec/biomed' })
 
-    expect(getGroup([service], 40, { launchdJobs: new Map([[40, 'com.apple.biomed']]) })?.why).toBe('macOS service com.apple.biomed')
+    expect(getGroup([service], 40, {}, { jobs: new Map([[40, 'com.apple.biomed']]) })?.why).toBe('macOS service com.apple.biomed')
   })
 
   it('falls back to the framework the binary belongs to', () => {
@@ -234,6 +225,16 @@ describe('macOS', () => {
     const workers = [41, 42, 43].map(pid => makeAnalyzed({ pid, ppid: 1, uid: 0, name: 'mdworker_shared', command: '/System/Library/mdworker_shared' }))
 
     expect(getGroup(workers, 41)?.processes).toHaveLength(3)
+  })
+})
+
+describe('adopters', () => {
+  it('keeps the init process out of projects even when it runs inside one', () => {
+    const init = makeAnalyzed({ pid: 1, ppid: 0, name: 'tini', command: '/usr/local/bin/tini' })
+    const cwd = `${HOME}/Projects/site`
+    const group = groupOf(buildGroups({ ...makeInput([]), processes: [init], cwds: new Map([[1, cwd]]), projectRoots: new Map([[cwd, cwd]]) }), 1)
+
+    expect(group).toMatchObject({ section: 'system', why: 'init process, adopts orphaned processes' })
   })
 })
 

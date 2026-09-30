@@ -6,12 +6,13 @@ import { parseArgs } from 'node:util'
 
 import { byCpu } from './analyze'
 import { loadConfig } from './config'
-import { getDaemonPid, installDaemon, isDaemonInstalled, runDaemon, uninstallDaemon } from './daemon'
+import { runDaemon } from './daemon'
 import { readEvents } from './events'
 import { formatCpu, formatDuration, formatMemory } from './format'
 import { isAlive } from './kill'
 import { arrangeSections, SECTION_TITLES } from './origin'
-import { CONFIG_FILE, DAEMON_LOG_FILE, EVENTS_FILE } from './paths'
+import { CONFIG_FILE, EVENTS_FILE } from './paths'
+import { currentPlatform } from './platform'
 import { takeSnapshot } from './snapshot'
 import { App } from './ui/App'
 
@@ -22,8 +23,8 @@ Usage
   whyslow list [--all] [--json]  print what runs and why
   whyslow log [--limit N]   show what the daemon has reported
   whyslow daemon run        run the watcher in foreground
-  whyslow daemon install    run the watcher in background at login (LaunchAgent)
-  whyslow daemon uninstall  remove the LaunchAgent
+  whyslow daemon install    run the watcher in background at login (LaunchAgent or systemd user unit)
+  whyslow daemon uninstall  remove it again
   whyslow daemon status     show whether the watcher is running
 
 Config: ${CONFIG_FILE}`
@@ -83,21 +84,22 @@ const log = async () => {
 }
 
 const daemonStatus = async () => {
-  const installed = await isDaemonInstalled()
-  const pid = await getDaemonPid()
+  const { daemon } = currentPlatform()
+  const installed = await daemon.isInstalled()
+  const pid = await daemon.pid()
   console.log(`installed: ${installed ? 'yes' : 'no'}`)
   console.log(`running: ${pid === null ? 'no' : `yes (pid ${pid})`}`)
-  console.log(`log: ${DAEMON_LOG_FILE}`)
+  console.log(`log: ${daemon.logHint}`)
 }
 
 const DAEMON_COMMANDS: Record<string, () => Promise<void>> = {
   run: () => runDaemon({ once: values.once }),
   install: async () => {
-    await installDaemon()
+    await currentPlatform().daemon.install()
     console.log('Daemon installed and started')
   },
   uninstall: async () => {
-    await uninstallDaemon()
+    await currentPlatform().daemon.uninstall()
     console.log('Daemon stopped and removed')
   },
   status: daemonStatus,

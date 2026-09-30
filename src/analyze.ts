@@ -10,7 +10,12 @@ type Sample = {
 
 export type TrackerContext = {
   myUid: number
-  launchdJobs: ReadonlyMap<number, string>
+  // Started and supervised by launchd or systemd
+  managedPids: ReadonlySet<number>
+  // pid 1, plus per-user subreapers like systemd --user
+  adopterPids: ReadonlySet<number>
+  // whyslow itself, which a container may run as a direct child of init
+  selfPid: number
   now: number
 }
 
@@ -21,14 +26,15 @@ const isSameProcess = (sample: Sample, process: ProcessInfo) =>
   sample.command === process.command && sample.elapsedSec <= process.elapsedSec
 
 export const isOrphan = (process: ProcessInfo, context: TrackerContext, config: Config) =>
-  process.pid > 1
-  && process.ppid === 1
+  process.pid !== context.selfPid
+  && !context.adopterPids.has(process.pid)
+  && context.adopterPids.has(process.ppid)
   && process.uid === context.myUid
-  // Processes spawned by launchd or ones that daemonized on purpose lead their own session
+  // Processes started by the service manager or ones that daemonized on purpose lead their own session
   && !process.stat.includes('s')
   // Helpers launched by apps lead their own group without a terminal; a job whose group leader died or that still holds a tty was left behind
   && (process.pgid !== process.pid || process.tty !== '??')
-  && !context.launchdJobs.has(process.pid)
+  && !context.managedPids.has(process.pid)
   && !config.ignore.includes(process.name)
 
 const staleReason = (process: ProcessInfo, orphan: boolean, parent: ProcessInfo | undefined, config: Config): string | null => {
@@ -125,7 +131,7 @@ export const createTracker = (config: Config) => {
       const runaway = runawayReason(process, context.now)
 
       const flags: Flag[] = [
-        ...(orphan ? [{ kind: 'orphan' as const, reason: 'its parent exited, launchd adopted it' }] : []),
+        ...(orphan ? [{ kind: 'orphan' as const, reason: 'its parent exited' }] : []),
         ...(stale ? [{ kind: 'stale' as const, reason: stale }] : []),
         ...(runaway ? [{ kind: 'runaway' as const, reason: runaway }] : []),
       ]

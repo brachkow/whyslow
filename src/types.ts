@@ -49,15 +49,7 @@ export type StaleEvent = {
   why?: string
 }
 
-export type LaunchdPlist = {
-  label: string
-  program: string | null
-  path: string
-  kind: 'agent' | 'daemon'
-  runAtLoad: boolean
-}
-
-export type Section = 'leftovers' | 'projects' | 'apps' | 'background' | 'macos' | 'other'
+export type Section = 'leftovers' | 'projects' | 'apps' | 'background' | 'system' | 'other'
 
 export type ProcessGroup = {
   id: string

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseDuration, parseLaunchctlList, parseLsofCwd, parseLsofPorts, parsePsOutput, parseVmStatUsedBytes } from './parse'
+import { parseDuration, parseLaunchctlList, parseLsofCwd, parseLsofPorts, parsePsOutput, parseVmStatUsedBytes } from './darwin-parse'
 
 describe('parseDuration', () => {
   it.each([

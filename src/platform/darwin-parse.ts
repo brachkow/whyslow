@@ -1,6 +1,6 @@
 import path from 'node:path'
 
-import type { ProcessInfo } from './types'
+import type { ProcessInfo } from '../types'
 
 // Handles ps `etime` ([[dd-]hh:]mm:ss) and `time` (mmm:ss.cc or [dd-]hh:mm:ss.cc)
 export const parseDuration = (value: string): number => {

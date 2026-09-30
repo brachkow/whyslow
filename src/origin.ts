@@ -1,17 +1,18 @@
 import path from 'node:path'
 
-import { describeMacosProcess, isMacosPath } from './macos'
-import type { AnalyzedProcess, Flag, LaunchdPlist, ProcessGroup, ProcessInfo, Section } from './types'
+import type { PlatformRules, ServiceInfo } from './platform/types'
+import type { AnalyzedProcess, Flag, ProcessGroup, ProcessInfo, Section } from './types'
 
 export type OriginInput = {
   processes: AnalyzedProcess[]
   myUid: number
   home: string
-  launchdJobs: ReadonlyMap<number, string>
-  plists: LaunchdPlist[]
+  services: ReadonlyMap<number, ServiceInfo>
+  adopterPids: ReadonlySet<number>
   cwds: ReadonlyMap<number, string>
   projectRoots: ReadonlyMap<string, string>
   ports: ReadonlyMap<number, number[]>
+  rules: PlatformRules
 }
 
 type Origin = {
@@ -24,22 +25,16 @@ type Origin = {
 
 const SHELLS = new Set(['fish', 'zsh', 'bash', 'sh', 'dash', 'nu', 'login', 'sudo', 'env'])
 const INHERITED_SECTIONS = new Set<Section>(['leftovers', 'apps', 'projects', 'background'])
-const APP_REGEX = /\/Applications\/(?:[^/]*\/)*?([^/]+)\.app(?:\/|$)/
 const MAX_SHOWN_COMMANDS = 2
+const DEFAULT_APP_WHY = 'app'
 const LOGIN_SHELL_PREFIX = /^-/
 const MAX_COMMAND_LENGTH = 40
-const BUNDLE_REGEX = /\/([^/]+)\.(framework|dext|bundle|xpc)\//
-
-export const appOf = (command: string): string | null => APP_REGEX.exec(command)?.[1] ?? null
 
 export const tildify = (file: string, home: string) =>
   file === home || file.startsWith(`${home}/`) ? `~${file.slice(home.length)}` : file
 
 // Login shells are reported as `-fish`
 const isShell = (process: ProcessInfo) => SHELLS.has(process.name.replace(LOGIN_SHELL_PREFIX, ''))
-
-const isSimulator = (process: ProcessInfo) =>
-  process.name === 'launchd_sim' || process.command.includes('.simruntime/') || process.command.includes('/CoreSimulator/')
 
 // Keeps the command recognizable while dropping long absolute paths, which may contain spaces
 export const shortCommand = (process: ProcessInfo) => {
@@ -71,23 +66,20 @@ export const ancestorsOf = <T extends ProcessInfo>(process: T, byPid: ReadonlyMa
 
 const isLeftover = (process: AnalyzedProcess) => process.flags.some(flag => flag.kind === 'orphan' || flag.kind === 'stale')
 
-const displayName = (process: ProcessInfo) => appOf(process.command) ?? process.name
-
-// First ancestor outside the group that isn't a shell: the terminal, IDE or tool that started it
-const launcherOf = (process: ProcessInfo, groupPids: ReadonlySet<number>, byPid: ReadonlyMap<number, ProcessInfo>) => {
-  const launcher = ancestorsOf(process, byPid).find(ancestor => !groupPids.has(ancestor.pid) && !isShell(ancestor))
-  return !launcher || launcher.pid === 1 ? 'launchd' : displayName(launcher)
-}
-
 export const buildGroups = (input: OriginInput): ProcessGroup[] => {
-  const { processes, myUid, home, launchdJobs, plists, cwds, projectRoots, ports } = input
+  const { processes, myUid, home, services, adopterPids, cwds, projectRoots, ports, rules } = input
   const byPid = new Map(processes.map(process => [process.pid, process]))
-  const plistByProgram = new Map(plists.filter(plist => plist.program).map(plist => [plist.program, plist]))
-  const plistByLabel = new Map(plists.map(plist => [plist.label, plist]))
   const origins = new Map<number, Origin>()
 
-  const describePlist = (plist: LaunchdPlist) =>
-    `${plist.kind === 'agent' ? 'LaunchAgent' : 'LaunchDaemon'} ${plist.label}${plist.runAtLoad ? ', starts at boot/login' : ''}`
+  const appOf = (process: ProcessInfo) => rules.appOf(process, services.get(process.pid))
+  const systemGroupOf = (process: ProcessInfo) => rules.systemGroupOf(process, services.get(process.pid))
+  const displayName = (process: ProcessInfo) => appOf(process)?.name ?? process.name
+
+  // First ancestor outside the group that isn't a shell: the terminal, IDE or tool that started it
+  const launcherOf = (process: ProcessInfo, groupPids: ReadonlySet<number>) => {
+    const launcher = ancestorsOf(process, byPid).find(ancestor => !groupPids.has(ancestor.pid) && !isShell(ancestor))
+    return !launcher || adopterPids.has(launcher.pid) ? null : displayName(launcher)
+  }
 
   const leftoverOrigin = (process: AnalyzedProcess): Origin => {
     const cwd = cwds.get(process.pid)
@@ -103,13 +95,9 @@ export const buildGroups = (input: OriginInput): ProcessGroup[] => {
   }
 
   const ownOrigin = (process: AnalyzedProcess): Origin | null => {
-    if (isSimulator(process)) {
-      return { section: 'apps', key: 'simulator', title: 'iOS Simulator', why: 'simulated devices booted from Xcode', location: null }
-    }
-
-    const app = appOf(process.command)
+    const app = appOf(process)
     if (app) {
-      return { section: 'apps', key: `app:${app}`, title: app, why: 'app', location: process.command.slice(0, process.command.indexOf('.app') + 4) }
+      return { section: 'apps', key: app.key, title: app.name, why: app.why ?? DEFAULT_APP_WHY, location: app.location }
     }
 
     const cwd = cwds.get(process.pid)
@@ -118,17 +106,13 @@ export const buildGroups = (input: OriginInput): ProcessGroup[] => {
       return { section: 'projects', key: `project:${root}`, title: path.basename(root), why: '', location: root }
     }
 
-    const label = launchdJobs.get(process.pid)
-    const plist = plistByProgram.get(process.command) ?? (label ? plistByLabel.get(label) : undefined)
-    if (plist) {
-      return { section: 'background', key: `agent:${plist.label}`, title: process.name, why: describePlist(plist), location: plist.path }
-    }
-    if (label && !label.startsWith('com.apple.') && !label.startsWith('application.')) {
-      return { section: 'background', key: `agent:${label}`, title: process.name, why: `launchd job ${label}`, location: process.command }
+    const service = services.get(process.pid)
+    if (service && service.kind !== 'app' && !service.system) {
+      return { section: 'background', key: `agent:${service.label}`, title: process.name, why: service.why, location: service.location ?? process.command }
     }
 
-    const detached = process.uid === myUid && process.ppid === 1 && process.stat.includes('s') && !label
-    if (detached && !isMacosPath(process.command)) {
+    const detached = process.uid === myUid && adopterPids.has(process.ppid) && process.stat.includes('s') && !service
+    if (detached && !systemGroupOf(process)) {
       const started = cwd ? `, started in ${tildify(cwd, home)}` : ''
       return { section: 'background', key: `detached:${process.pid}`, title: process.name, why: `detached from its terminal${started}`, location: process.command }
     }
@@ -136,21 +120,23 @@ export const buildGroups = (input: OriginInput): ProcessGroup[] => {
     return null
   }
 
-  const fallbackOrigin = (process: AnalyzedProcess): Origin => {
-    const label = launchdJobs.get(process.pid)
+  // init and per-user service managers sit above everything, whatever directory they started in
+  const adopterOrigin = (process: AnalyzedProcess): Origin => {
+    const system = systemGroupOf(process)
+    return { section: 'system', key: system?.key ?? `system:${process.name}`, title: process.name, why: system?.why ?? 'init process, adopts orphaned processes', location: process.command }
+  }
 
-    if (isMacosPath(process.command)) {
-      const bundle = BUNDLE_REGEX.exec(process.command)
-      const fallback = bundle ? `part of ${bundle[1]} ${bundle[2]}` : `macOS component from ${path.dirname(process.command)}`
-      const why = describeMacosProcess(process.name) ?? (label ? `macOS service ${label}` : fallback)
-      return { section: 'macos', key: `macos:${process.name}`, title: process.name, why, location: process.command }
+  const fallbackOrigin = (process: AnalyzedProcess): Origin => {
+    const system = systemGroupOf(process)
+    if (system) {
+      return { section: 'system', key: system.key, title: system.title, why: system.why, location: process.command }
     }
     if (process.uid !== myUid) {
       return { section: 'background', key: `system:${process.name}`, title: process.name, why: `system-wide helper, runs as ${process.user}`, location: process.command }
     }
 
     const parent = byPid.get(process.ppid)
-    return { section: 'other', key: `other:${process.name}`, title: process.name, why: `started by ${parent ? displayName(parent) : 'launchd'}`, location: process.command }
+    return { section: 'other', key: `other:${process.name}`, title: process.name, why: `started by ${parent ? displayName(parent) : rules.adopterName}`, location: process.command }
   }
 
   const resolve = (process: AnalyzedProcess): Origin => {
@@ -162,7 +148,8 @@ export const buildGroups = (input: OriginInput): ProcessGroup[] => {
     const leftoverRoot = [process, ...ancestorsOf(process, byPid)].find(isLeftover)
     const inherited = (() => {
       const parent = byPid.get(process.ppid)
-      if (!parent || parent.pid <= 1) {
+      // Adopters and the kernel parent everything, so they say nothing about where a process came from
+      if (!parent || parent.pid === 0 || adopterPids.has(parent.pid)) {
         return null
       }
       const parentOrigin = resolve(parent)
@@ -170,6 +157,7 @@ export const buildGroups = (input: OriginInput): ProcessGroup[] => {
     })()
 
     const origin = (leftoverRoot && leftoverOrigin(leftoverRoot))
+      ?? (adopterPids.has(process.pid) ? adopterOrigin(process) : null)
       ?? ownOrigin(process)
       ?? inherited
       ?? fallbackOrigin(process)
@@ -198,11 +186,11 @@ export const buildGroups = (input: OriginInput): ProcessGroup[] => {
         const jobs = members.filter(isJob).toSorted((a, b) => b.cpuPercent - a.cpuPercent)
         const commands = [...new Set(jobs.map(job => `\`${shortCommand(job)}\``))]
         const more = commands.length > MAX_SHOWN_COMMANDS ? ` +${commands.length - MAX_SHOWN_COMMANDS} more` : ''
-        const launcher = launcherOf(jobs[0] ?? first, pids, byPid)
-        const source = launcher === 'launchd' ? 'detached' : `from ${launcher}`
+        const launcher = launcherOf(jobs[0] ?? first, pids)
+        const source = launcher ? `from ${launcher}` : 'detached'
         return `${commands.slice(0, MAX_SHOWN_COMMANDS).join(', ') || 'idle shells'}${more} ${source}`
       }
-      if (origin.key.startsWith('app:') && members.length > 1) {
+      if (origin.section === 'apps' && origin.why === DEFAULT_APP_WHY && members.length > 1) {
         const heaviest = members.toSorted((a, b) => b.cpuPercent - a.cpuPercent)[0]
         return heaviest && heaviest.cpuPercent >= 1 ? `app, busiest: ${heaviest.name}` : 'app'
       }
@@ -228,14 +216,14 @@ export const buildGroups = (input: OriginInput): ProcessGroup[] => {
   })
 }
 
-export const SECTION_ORDER: Section[] = ['leftovers', 'projects', 'apps', 'background', 'macos', 'other']
+export const SECTION_ORDER: Section[] = ['leftovers', 'projects', 'apps', 'background', 'system', 'other']
 
 export const SECTION_TITLES: Record<Section, string> = {
   leftovers: 'Leftovers',
   projects: 'Your projects',
   apps: 'Apps',
   background: 'Background agents',
-  macos: 'macOS',
+  system: process.platform === 'darwin' ? 'macOS' : 'System',
   other: 'Other',
 }
 

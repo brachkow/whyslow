@@ -8,11 +8,13 @@ import type { ProcessInfo } from './types'
 const NOW = 1_800_000_000_000
 const MINUTE = 60
 
-const analyzeOnce = (process: ProcessInfo, launchdJobs = new Map<number, string>()) =>
-  createTracker(DEFAULT_CONFIG).update([process], { myUid: MY_UID, launchdJobs, now: NOW })[0]
+const ADOPTERS = new Set([1])
 
-const getKinds = (process: ProcessInfo, launchdJobs?: Map<number, string>) =>
-  analyzeOnce(process, launchdJobs)?.flags.map(flag => flag.kind)
+const analyzeOnce = (process: ProcessInfo, managedPids = new Set<number>(), adopterPids = ADOPTERS) =>
+  createTracker(DEFAULT_CONFIG).update([process], { myUid: MY_UID, managedPids, adopterPids, selfPid: 0, now: NOW })[0]
+
+const getKinds = (process: ProcessInfo, managedPids?: Set<number>, adopterPids?: Set<number>) =>
+  analyzeOnce(process, managedPids, adopterPids)?.flags.map(flag => flag.kind)
 
 const makeOrphan = (overrides: Partial<ProcessInfo> = {}) =>
   makeProcess({ pid: 5000, ppid: 1, pgid: 4990, stat: 'S', ...overrides })
@@ -34,8 +36,23 @@ describe('orphan detection', () => {
     expect(getKinds(makeOrphan({ stat: 'Ss' }))).not.toContain('orphan')
   })
 
-  it('ignores launchd jobs', () => {
-    expect(getKinds(makeOrphan(), new Map([[5000, 'com.example.job']]))).not.toContain('orphan')
+  it('ignores processes managed by the service manager', () => {
+    expect(getKinds(makeOrphan(), new Set([5000]))).not.toContain('orphan')
+  })
+
+  it('flags processes adopted by a per-user subreaper like systemd --user', () => {
+    expect(getKinds(makeOrphan({ ppid: 900 }), new Set(), new Set([1, 900]))).toContain('orphan')
+  })
+
+  it('never flags whyslow itself', () => {
+    const self = makeOrphan({ pid: 4242 })
+    const [result] = createTracker(DEFAULT_CONFIG).update([self], { myUid: MY_UID, managedPids: new Set(), adopterPids: ADOPTERS, selfPid: 4242, now: NOW })
+
+    expect(result?.flags).toEqual([])
+  })
+
+  it('never flags an adopter itself', () => {
+    expect(getKinds(makeOrphan({ pid: 900, ppid: 1 }), new Set(), new Set([1, 900]))).not.toContain('orphan')
   })
 
   it('ignores processes of other users', () => {
@@ -63,7 +80,7 @@ describe('stale detection', () => {
   it('marks a long-lived zombie stale and names its parent', () => {
     const parent = makeProcess({ pid: 42, name: 'node' })
     const zombie = makeProcess({ ppid: 42, stat: 'Z+', elapsedSec: 11 * MINUTE })
-    const [, analyzed] = createTracker(DEFAULT_CONFIG).update([parent, zombie], { myUid: MY_UID, launchdJobs: new Map(), now: NOW })
+    const [, analyzed] = createTracker(DEFAULT_CONFIG).update([parent, zombie], { myUid: MY_UID, managedPids: new Set(), adopterPids: ADOPTERS, selfPid: 0, now: NOW })
 
     expect(analyzed?.flags).toEqual([{ kind: 'stale', reason: 'zombie, parent node (42) never reaped it' }])
   })
@@ -89,7 +106,7 @@ describe('runaway detection', () => {
   it('flags sustained load observed across samples', () => {
     const tracker = createTracker(DEFAULT_CONFIG)
     const base = makeProcess({ elapsedSec: 60 * MINUTE, cpuTimeSec: 0 })
-    const context = { myUid: MY_UID, launchdJobs: new Map<number, string>() }
+    const context = { myUid: MY_UID, managedPids: new Set<number>(), adopterPids: ADOPTERS, selfPid: 0 }
 
     tracker.update([base], { ...context, now: NOW })
     tracker.update([{ ...base, elapsedSec: base.elapsedSec + 60, cpuTimeSec: 60 }], { ...context, now: NOW + 60_000 })
@@ -104,7 +121,7 @@ describe('runaway detection', () => {
   it('measures CPU from cputime delta between samples', () => {
     const tracker = createTracker(DEFAULT_CONFIG)
     const base = makeProcess({ cpuTimeSec: 10, psCpuPercent: 3 })
-    const context = { myUid: MY_UID, launchdJobs: new Map<number, string>() }
+    const context = { myUid: MY_UID, managedPids: new Set<number>(), adopterPids: ADOPTERS, selfPid: 0 }
 
     tracker.update([base], { ...context, now: NOW })
     const [result] = tracker.update([{ ...base, elapsedSec: base.elapsedSec + 2, cpuTimeSec: 11 }], { ...context, now: NOW + 2000 })
@@ -115,7 +132,7 @@ describe('runaway detection', () => {
   it('resets history when a pid is reused by another program', () => {
     const tracker = createTracker(DEFAULT_CONFIG)
     const base = makeProcess({ cpuTimeSec: 1000, psCpuPercent: 7 })
-    const context = { myUid: MY_UID, launchdJobs: new Map<number, string>() }
+    const context = { myUid: MY_UID, managedPids: new Set<number>(), adopterPids: ADOPTERS, selfPid: 0 }
 
     tracker.update([base], { ...context, now: NOW })
     const [result] = tracker.update([{ ...base, command: '/bin/other', elapsedSec: 1, cpuTimeSec: 0 }], { ...context, now: NOW + 2000 })

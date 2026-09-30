@@ -5,11 +5,11 @@ import os from 'node:os'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { byCpu, byMemory, byRuntime, collectDescendants } from '../analyze'
-import { getDaemonPid } from '../daemon'
 import { formatCpu, formatMemory } from '../format'
 import { killProcesses } from '../kill'
 import type { KillSignal } from '../kill'
 import { arrangeSections } from '../origin'
+import { currentPlatform } from '../platform'
 import { searchGroups } from '../search'
 import type { Config, ProcessGroup } from '../types'
 import { GroupDetail, ProcessDetail } from './Detail'
@@ -35,6 +35,7 @@ const isTypedText = (input: string, key: Key) =>
   input.length > 0 && !key.ctrl && !key.meta && !key.return && !key.escape && !MOUSE_REPORT.test(input)
 
 const CORES = os.availableParallelism()
+const SELF_PID = process.pid
 
 const DETAIL_ROWS = 7
 // Status line, detail pane and key hints
@@ -57,7 +58,7 @@ export const App = ({ config }: Props) => {
   const [searching, setSearching] = useState(false)
 
   useEffect(() => {
-    void getDaemonPid().then(setDaemonPid)
+    void currentPlatform().daemon.pid().then(setDaemonPid)
   }, [])
 
   const byPid = useMemo(() => new Map(snapshot.processes.map(process => [process.pid, process])), [snapshot])
@@ -115,12 +116,14 @@ export const App = ({ config }: Props) => {
     setSelectedKey(group.id)
   }
 
+  // whyslow never offers to kill itself, even when it sits inside the selected group
   const killTargetOf = (row: Row | undefined): KillTarget | null => {
     if (row?.kind === 'group') {
       const pids = new Set(row.group.processes.flatMap(process => [process.pid, ...collectDescendants(snapshot.processes, process.pid)]))
-      return { label: `${row.group.title}: ${pids.size} processes`, pids: [...pids] }
+      pids.delete(SELF_PID)
+      return pids.size > 0 ? { label: `${row.group.title}: ${pids.size} processes`, pids: [...pids] } : null
     }
-    if (row?.kind === 'process') {
+    if (row?.kind === 'process' && row.process.pid !== SELF_PID) {
       const pids = [row.process.pid, ...collectDescendants(snapshot.processes, row.process.pid)]
       return { label: `${row.process.name} (${row.process.pid})${pids.length > 1 ? ` and ${pids.length - 1} children` : ''}`, pids }
     }
@@ -196,8 +199,9 @@ export const App = ({ config }: Props) => {
       void refresh()
     }
     if (input === 'x') {
-      setMessage(null)
-      setConfirming(killTargetOf(selected))
+      const target = killTargetOf(selected)
+      setMessage(target ? null : 'Nothing to kill: that is whyslow itself')
+      setConfirming(target)
     }
   })
 
