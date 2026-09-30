@@ -1,0 +1,40 @@
+{
+  "name": "whyslow",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "whyslow": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/cli.tsx",
+    "daemon": "tsx src/cli.tsx daemon run",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ink-tools/ink-mouse": "^2.1.0",
+    "dayjs": "^1.11.23",
+    "ink": "^7.1.1",
+    "ink-link": "^5.0.0",
+    "react": "^19.3.0"
+  },
+  "devDependencies": {
+    "@faker-js/faker": "^10.6.0",
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "eslint": "^10.11.0",
+    "eslint-config-fans": "^1.11.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.2"
+  }
+}
