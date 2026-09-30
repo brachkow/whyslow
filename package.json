@@ -17,7 +17,9 @@
     "daemon": "tsx src/cli.tsx daemon run",
     "test": "vitest run",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:linux": "docker compose -f test/linux/compose.yaml run --build --rm -T linux pnpm test",
+    "start:linux": "docker compose -f test/linux/compose.yaml run --build --rm linux node dist/cli.js"
   },
   "dependencies": {
     "@ink-tools/ink-mouse": "^2.1.0",

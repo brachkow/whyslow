@@ -1,0 +1,11 @@
+# Runs whyslow on Linux: `docker compose -f test/linux/compose.yaml run --rm linux`
+# Interactive view: `docker compose -f test/linux/compose.yaml run --rm linux node dist/cli.js`
+services:
+  linux:
+    build:
+      context: ../..
+      dockerfile: test/linux/Dockerfile
+    # tini as pid 1 adopts orphans the way init does on a real system
+    init: true
+    tty: true
+    stdin_open: true
