@@ -31,3 +31,12 @@ export const isAlive = (pid: number) => {
     return false
   }
 }
+
+// SIGCHLD tells a parent that a child finished, which prompts well-behaved programs to collect their zombies
+export const nudgeParent = (pid: number) => {
+  try {
+    return process.kill(pid, 'SIGCHLD')
+  } catch {
+    return false
+  }
+}

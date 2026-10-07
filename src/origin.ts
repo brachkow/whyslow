@@ -21,6 +21,8 @@ type Origin = {
   title: string
   why: string
   location: string | null
+  // Set for zombies, which are grouped by the parent that never collected them
+  zombieParent?: { name: string, pid: number }
 }
 
 const SHELLS = new Set(['fish', 'zsh', 'bash', 'sh', 'dash', 'nu', 'login', 'sudo', 'env'])
@@ -64,6 +66,8 @@ export const ancestorsOf = <T extends ProcessInfo>(process: T, byPid: ReadonlyMa
   return result
 }
 
+export const isZombie = (process: ProcessInfo) => process.stat.startsWith('Z')
+
 const isLeftover = (process: AnalyzedProcess) => process.flags.some(flag => flag.kind === 'orphan' || flag.kind === 'stale')
 
 export const buildGroups = (input: OriginInput): ProcessGroup[] => {
@@ -81,7 +85,17 @@ export const buildGroups = (input: OriginInput): ProcessGroup[] => {
     return !launcher || adopterPids.has(launcher.pid) ? null : displayName(launcher)
   }
 
+  // A zombie has already exited; only its parent can clear it by collecting its exit status
+  const zombieOrigin = (process: AnalyzedProcess): Origin => {
+    const parent = byPid.get(process.ppid)
+    const parentName = parent ? displayName(parent) : `pid ${process.ppid}`
+    return { section: 'leftovers', key: `zombie:${process.ppid}`, title: '', why: '', location: parent?.command ?? null, zombieParent: { name: parentName, pid: process.ppid } }
+  }
+
   const leftoverOrigin = (process: AnalyzedProcess): Origin => {
+    if (isZombie(process)) {
+      return zombieOrigin(process)
+    }
     const cwd = cwds.get(process.pid)
     const root = cwd ? projectRoots.get(cwd) : undefined
     const place = root ? `in project ${path.basename(root)}` : (cwd ? `in ${tildify(cwd, home)}` : null)
@@ -177,7 +191,15 @@ export const buildGroups = (input: OriginInput): ProcessGroup[] => {
       flags.set(flag.kind, flags.get(flag.kind) ?? flag)
     }
 
+    const zombies = origin.zombieParent && {
+      title: `${members.length === 1 ? 'zombie' : `${members.length} zombies`} of ${origin.zombieParent.name}`,
+      why: `exited, but ${origin.zombieParent.name} (${origin.zombieParent.pid}) never collected ${members.length === 1 ? 'it' : 'them'}. Uses no memory, goes away when the parent exits`,
+    }
+
     const why = (() => {
+      if (zombies) {
+        return zombies.why
+      }
       if (origin.section === 'projects') {
         const isJob = (member: AnalyzedProcess) => {
           const parent = byPid.get(member.ppid)
@@ -203,7 +225,7 @@ export const buildGroups = (input: OriginInput): ProcessGroup[] => {
     return {
       id: origin.key,
       section: origin.section,
-      title: origin.title,
+      title: zombies ? zombies.title : origin.title,
       why,
       location: origin.location ? tildify(origin.location, home) : null,
       processes: members,

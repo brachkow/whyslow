@@ -174,6 +174,27 @@ describe('leftovers', () => {
   })
 })
 
+describe('zombies', () => {
+  const lazygit = makeAnalyzed({ pid: 70, ppid: 1, name: 'lazygit', command: '/opt/homebrew/bin/lazygit' })
+  const makeZombie = (pid: number) => makeAnalyzed({ pid, ppid: 70, name: '<defunct>', command: '<defunct>', args: '<defunct>', stat: 'Z+', flags: [{ kind: 'stale', reason: 'zombie' }] })
+
+  it('names the parent that never collected the zombie', () => {
+    expect(getGroup([lazygit, makeZombie(71)], 71)).toMatchObject({
+      section: 'leftovers',
+      title: 'zombie of lazygit',
+      why: 'exited, but lazygit (70) never collected it. Uses no memory, goes away when the parent exits',
+    })
+  })
+
+  it('groups zombies of the same parent', () => {
+    expect(getGroup([lazygit, makeZombie(71), makeZombie(72)], 71)).toMatchObject({ title: '2 zombies of lazygit', processes: [{ pid: 71 }, { pid: 72 }] })
+  })
+
+  it('keeps the parent out of the zombie group', () => {
+    expect(getGroup([lazygit, makeZombie(71)], 70)?.id).not.toBe('zombie:70')
+  })
+})
+
 describe('background', () => {
   const plist: LaunchdPlist = { label: 'com.vendor.sync', program: '/opt/vendor/syncd', path: '/Library/LaunchDaemons/com.vendor.sync.plist', kind: 'daemon', runAtLoad: true }
 

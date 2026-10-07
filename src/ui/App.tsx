@@ -2,16 +2,17 @@ import { getBoundingClientRect, useOnClick, useOnWheel } from '@ink-tools/ink-mo
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink'
 import type { Key } from 'ink'
 import os from 'node:os'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { byCpu, byMemory, byRuntime, collectDescendants } from '../analyze'
 import { formatCpu, formatMemory } from '../format'
-import { killProcesses } from '../kill'
+import { killProcesses, nudgeParent } from '../kill'
 import type { KillSignal } from '../kill'
-import { arrangeSections } from '../origin'
+import { arrangeSections, isZombie } from '../origin'
 import { currentPlatform } from '../platform'
 import { searchGroups } from '../search'
-import type { Config, ProcessGroup } from '../types'
+import type { AnalyzedProcess, Config, ProcessGroup } from '../types'
 import { GroupDetail, ProcessDetail } from './Detail'
 import { isSelectable, rowAtLine, visibleWindow } from './layout'
 import type { Row } from './layout'
@@ -20,7 +21,8 @@ import { useSnapshot } from './use-snapshot'
 
 type Sort = 'cpu' | 'memory' | 'runtime'
 
-type KillTarget = { label: string, pids: number[] }
+// `prompt` replaces the plain kill question, e.g. when stopping a zombie's parent is only the last resort
+type KillTarget = { label: string, pids: number[], prompt?: string }
 
 const SORTERS = { cpu: byCpu, memory: byMemory, runtime: byRuntime }
 const NEXT_SORT: Record<Sort, Sort> = { cpu: 'memory', memory: 'runtime', runtime: 'cpu' }
@@ -36,6 +38,9 @@ const isTypedText = (input: string, key: Key) =>
 
 const CORES = os.availableParallelism()
 const SELF_PID = process.pid
+// Enough for a parent to handle SIGCHLD and collect its children
+const ZOMBIE_NUDGE_WAIT_MS = 1000
+const SELF_REASON = 'Nothing to kill: that is whyslow itself'
 
 const DETAIL_ROWS = 7
 // Status line, detail pane and key hints
@@ -116,18 +121,61 @@ export const App = ({ config }: Props) => {
     setSelectedKey(group.id)
   }
 
+  const zombiesOf = (row: Row | undefined): AnalyzedProcess[] | null => {
+    if (row?.kind === 'process' && isZombie(row.process)) {
+      return [row.process]
+    }
+    if (row?.kind === 'group' && row.group.processes.length > 0 && row.group.processes.every(isZombie)) {
+      return row.group.processes
+    }
+    return null
+  }
+
+  // Zombies have already exited and only their parent can clear them, so ask it politely and offer to stop it only if it ignores that
+  const resolveZombies = async (zombies: AnalyzedProcess[]) => {
+    const parentPids = [...new Set(zombies.map(zombie => zombie.ppid))]
+    const parents = parentPids.flatMap(pid => byPid.get(pid) ?? [])
+    if (parents.length !== parentPids.length || parentPids.some(pid => pid <= 1 || pid === SELF_PID)) {
+      setMessage('These zombies belong to the system, which collects them itself')
+      return
+    }
+
+    const names = parents.map(parent => `${parent.name} (${parent.pid})`).join(', ')
+    const them = zombies.length === 1 ? 'its zombie' : `its ${zombies.length} zombies`
+    setMessage(`Asking ${names} to collect ${them}…`)
+    for (const pid of parentPids) {
+      nudgeParent(pid)
+    }
+    await sleep(ZOMBIE_NUDGE_WAIT_MS)
+
+    const zombiePids = new Set(zombies.map(zombie => zombie.pid))
+    const current = await currentPlatform().readProcesses()
+    const remaining = current.filter(candidate => zombiePids.has(candidate.pid) && isZombie(candidate))
+    if (remaining.length === 0) {
+      setMessage(`${names} collected ${them}`)
+      void refresh()
+      return
+    }
+
+    const home = snapshot.groups.find(group => group.processes.some(process => process.pid === parents[0]?.pid))
+    const where = home ? ` It runs in ${home.title}, quit it there to clear ${them}, or` : ''
+    setMessage(null)
+    setConfirming({ label: names, pids: parentPids, prompt: `${names} ignored the request.${where}` })
+  }
+
   // whyslow never offers to kill itself, even when it sits inside the selected group
-  const killTargetOf = (row: Row | undefined): KillTarget | null => {
+  // A string explains why there is nothing to kill
+  const killTargetOf = (row: Row | undefined): KillTarget | string => {
     if (row?.kind === 'group') {
       const pids = new Set(row.group.processes.flatMap(process => [process.pid, ...collectDescendants(snapshot.processes, process.pid)]))
       pids.delete(SELF_PID)
-      return pids.size > 0 ? { label: `${row.group.title}: ${pids.size} processes`, pids: [...pids] } : null
+      return pids.size > 0 ? { label: `${row.group.title}: ${pids.size} processes`, pids: [...pids] } : SELF_REASON
     }
     if (row?.kind === 'process' && row.process.pid !== SELF_PID) {
       const pids = [row.process.pid, ...collectDescendants(snapshot.processes, row.process.pid)]
       return { label: `${row.process.name} (${row.process.pid})${pids.length > 1 ? ` and ${pids.length - 1} children` : ''}`, pids }
     }
-    return null
+    return SELF_REASON
   }
 
   const kill = (target: KillTarget, signal: KillSignal) => {
@@ -199,13 +247,18 @@ export const App = ({ config }: Props) => {
       void refresh()
     }
     if (input === 'x') {
+      const zombies = zombiesOf(selected)
+      if (zombies) {
+        void resolveZombies(zombies)
+        return
+      }
       const target = killTargetOf(selected)
-      setMessage(target ? null : 'Nothing to kill: that is whyslow itself')
-      setConfirming(target)
+      setMessage(typeof target === 'string' ? target : null)
+      setConfirming(typeof target === 'string' ? null : target)
     }
   })
 
-  const footerMode = (confirming && 'confirm') || (searching && 'search') || 'hints'
+  const footerMode = (confirming?.prompt && 'stopParent') || (confirming && 'confirm') || (searching && 'search') || 'hints'
 
   // Per-process CPU is per core like in Activity Monitor, the machine total is shared across all cores
   const machineCpu = snapshot.processes.reduce((sum, process) => sum + process.cpuPercent, 0) / CORES
@@ -268,13 +321,22 @@ export const App = ({ config }: Props) => {
       </Box>
 
       {{
-        confirm: () => confirming && (
+        confirm: () => confirming && !confirming.prompt && (
           <Text>
             <Text bold color="red">{`Kill ${confirming.label}? `}</Text>
             <Text bold>y</Text>
             {' SIGTERM · '}
             <Text bold>f</Text>
             {' SIGKILL · any other key cancels'}
+          </Text>
+        ),
+        stopParent: () => confirming?.prompt && (
+          <Text wrap="truncate">
+            <Text color="yellow">{`${confirming.prompt} `}</Text>
+            <Text bold>y</Text>
+            {' stop it now · '}
+            <Text bold>f</Text>
+            {' force quit · any other key keeps it running'}
           </Text>
         ),
         search: () => (
