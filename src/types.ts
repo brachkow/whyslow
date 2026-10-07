@@ -27,26 +27,12 @@ export type AnalyzedProcess = ProcessInfo & {
   flags: Flag[]
 }
 
-export type Config = {
+export type Thresholds = {
   staleOrphanAfterMin: number
   stuckAfterMin: number
   runawayCpuPercent: number
   runawayAfterMin: number
-  daemonIntervalSec: number
   ignore: string[]
-}
-
-export type StaleEvent = {
-  at: string
-  pid: number
-  name: string
-  args: string
-  kind: FlagKind
-  reason: string
-  rssKb: number
-  cpuPercent: number
-  // Missing in events written before origins existed
-  why?: string
 }
 
 export type Section = 'leftovers' | 'projects' | 'apps' | 'background' | 'system' | 'other'

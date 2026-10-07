@@ -7,7 +7,7 @@ import { buildGroups } from './origin'
 import { currentPlatform } from './platform'
 import type { MemoryUsage, ServiceInfo } from './platform/types'
 import { readProjectRoots } from './projects'
-import type { AnalyzedProcess, Config, ProcessGroup, ProcessInfo } from './types'
+import type { AnalyzedProcess, ProcessGroup, ProcessInfo } from './types'
 
 // CPU is measured as cputime delta between two samples taken this far apart
 const SAMPLE_GAP_MS = 1000
@@ -57,8 +57,8 @@ export const groupProcesses = async (processes: AnalyzedProcess[]) => {
   return { groups, cwds, ports }
 }
 
-export const takeSnapshot = async (config: Config): Promise<Snapshot> => {
-  const tracker = createTracker(config)
+export const takeSnapshot = async (): Promise<Snapshot> => {
+  const tracker = createTracker()
   const sample = async () => {
     const { processes, context } = await readTrackerInput()
     return tracker.update(processes, { ...context, now: Date.now() })

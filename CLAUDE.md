@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-whyslow is a terminal tool (Ink + React on Node) that explains what runs on macOS and Linux and why: it groups processes by who is responsible for them, flags orphaned, stale and runaway ones, and can kill them. A daemon reports newly stale processes.
+whyslow is a terminal tool (Ink + React on Node) that explains what runs on macOS and Linux and why: it groups processes by who is responsible for them, flags orphaned, stale and runaway ones, and can kill them.
 
 ## Commands
 
@@ -27,11 +27,10 @@ The global `whyslow` (`pnpm add -g .`) links to this folder and runs `dist/`, so
 One snapshot flows through these layers:
 
 1. **`src/platform/`** — everything OS-specific behind the `Platform` interface (`types.ts`), chosen by `currentPlatform()`. `darwin.ts` uses `ps`, `lsof`, `launchctl`, `plutil`, `vm_stat`; `linux.ts` reads `/proc` directly (no `ps`/`lsof`/`ss`) and gets services and desktop apps from systemd cgroups. Pure parsers live in `*-parse.ts` so they are tested on any OS. Each platform also provides `PlatformRules` (`appOf`, `systemGroupOf`, `adopterName`): pure classification rules used by the shared code.
-2. **`src/analyze.ts`** — `createTracker` turns raw processes into `AnalyzedProcess` with CPU % and flags. CPU is the cputime delta between two samples taken 1s apart (`snapshot.ts`), not `ps %cpu`. Orphan detection relies on `TrackerContext`: `adopterPids` (pid 1, plus `systemd --user` on Linux), `managedPids` (started by launchd/systemd) and `selfPid` (whyslow never flags itself).
+2. **`src/analyze.ts`** — `createTracker` turns raw processes into `AnalyzedProcess` with CPU % and flags. CPU is the cputime delta between two samples taken 1s apart (`snapshot.ts`), not `ps %cpu`. Thresholds are the fixed `DEFAULT_THRESHOLDS`; there is no config file. Orphan detection relies on `TrackerContext`: `adopterPids` (pid 1, plus `systemd --user` on Linux), `managedPids` (started by launchd/systemd) and `selfPid` (whyslow never flags itself).
 3. **`src/origin.ts`** — `buildGroups` assigns every process an origin and merges them into `ProcessGroup`s per section (leftovers, projects, apps, background, system, other). Resolution order per process: leftover tree (orphan/stale root and its descendants; zombies grouped by parent) → adopters → own origin (app, project by working directory, non-system service, detached daemon) → inherit from parent (only for leftovers/apps/projects/background, never from adopters) → system group → other. Projects come from `projects.ts` (nearest `.git`, then package manifests, never `$HOME`).
-4. **`src/snapshot.ts`** — glue: `readTrackerInput` (cheap, used every daemon tick) and `groupProcesses` (working directories, ports, detailed service definitions; slower).
+4. **`src/snapshot.ts`** — glue: `readTrackerInput` (processes and service manager state for the tracker) and `groupProcesses` (working directories, ports, detailed service definitions; slower).
 5. **`src/ui/`** — Ink app. `layout.ts` holds the row model, the scrolling window and line→row mapping for mouse clicks; `App.tsx` owns state, keys, search, kill flow.
-6. **`src/daemon.ts`** — loop on `readTrackerInput`, `reports.ts` dedupes events per process, `explain` resolves origins only when there is something to report.
 
 ## Things that are easy to get wrong
 

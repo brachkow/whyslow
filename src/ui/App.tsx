@@ -3,7 +3,7 @@ import { Box, Text, useApp, useInput, useWindowSize } from 'ink'
 import type { Key } from 'ink'
 import os from 'node:os'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 
 import { byCpu, byMemory, byRuntime, collectDescendants } from '../analyze'
 import { formatCpu, formatMemory } from '../format'
@@ -12,7 +12,7 @@ import type { KillSignal } from '../kill'
 import { arrangeSections, isZombie } from '../origin'
 import { currentPlatform } from '../platform'
 import { searchGroups } from '../search'
-import type { AnalyzedProcess, Config, ProcessGroup } from '../types'
+import type { AnalyzedProcess, ProcessGroup } from '../types'
 import { GroupDetail, ProcessDetail } from './Detail'
 import { isSelectable, rowAtLine, visibleWindow } from './layout'
 import type { Row } from './layout'
@@ -46,25 +46,18 @@ const DETAIL_ROWS = 7
 // Status line, detail pane and key hints
 const CHROME_ROWS = 2 + DETAIL_ROWS
 
-type Props = { config: Config }
-
-export const App = ({ config }: Props) => {
+export const App = () => {
   const { exit } = useApp()
   const { columns, rows: terminalRows } = useWindowSize()
-  const { snapshot, loading, error, refresh } = useSnapshot(config)
+  const { snapshot, loading, error, refresh } = useSnapshot()
   const [sort, setSort] = useState<Sort>('cpu')
   const [showQuiet, setShowQuiet] = useState(false)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<KillTarget | null>(null)
   const [message, setMessage] = useState<string | null>(null)
-  const [daemonPid, setDaemonPid] = useState<number | null>(null)
   const [query, setQuery] = useState('')
   const [searching, setSearching] = useState(false)
-
-  useEffect(() => {
-    void currentPlatform().daemon.pid().then(setDaemonPid)
-  }, [])
 
   const byPid = useMemo(() => new Map(snapshot.processes.map(process => [process.pid, process])), [snapshot])
 
@@ -304,9 +297,6 @@ export const App = ({ config }: Props) => {
         )}
         <Text dimColor>{`RSS ${formatMemory(totalRssKb)}`}</Text>
         <Text dimColor>{`sort: ${sort}`}</Text>
-        {daemonPid === null
-          ? <Text dimColor>daemon: off</Text>
-          : <Text color="green">{`daemon: on (${daemonPid})`}</Text>}
         {loading && <Text color="yellow">refreshing…</Text>}
       </Box>
       {error && <Text color="red">{error}</Text>}

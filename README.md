@@ -1,6 +1,6 @@
 # whyslow
 
-Answers what runs on your computer and why, on macOS and Linux. Processes are grouped by who is responsible for them, with a one-line explanation for each group, and you can kill a whole group or a single process. A background daemon notifies you when a stale process appears.
+Answers what runs on your computer and why, on macOS and Linux. Processes are grouped by who is responsible for them, with a one-line explanation for each group, and you can kill a whole group or a single process.
 
 ## Setup
 
@@ -18,14 +18,9 @@ The global install links to this folder, so run `pnpm build` after changing the 
 ```sh
 whyslow                          # interactive view
 whyslow list [--all] [--json]    # print what runs and why
-whyslow log [--limit N]          # what the daemon has reported
-whyslow daemon run               # watcher in foreground
-whyslow daemon install           # watcher at login: a LaunchAgent on macOS, a systemd user unit on Linux
-whyslow daemon uninstall
-whyslow daemon status
 ```
 
-Keys in the interactive view: `↑↓`/`jk` or the mouse wheel move, Enter or a click expands or collapses a group, `/` searches (Enter keeps the filter, Esc clears it), `x` kills the selected group or process with its children (`y` SIGTERM, `f` SIGKILL), `a` shows quiet groups, `s` cycles the sort between CPU, memory and runtime, `r` refreshes, `q` quits. whyslow never kills itself
+Keys in the interactive view: `↑↓`/`jk` or the mouse wheel move, Enter or a click expands or collapses a group, `/` searches (Enter keeps the filter, Esc clears it), `x` kills the selected group or process with its children (`y` SIGTERM, `f` SIGKILL), `a` shows quiet groups, `s` cycles the sort between CPU, memory and runtime, `r` refreshes, `q` quits. whyslow never kills itself. On a zombie, `x` first asks its parent to collect it and only offers to stop the parent if it ignores that
 
 ## Sections
 
@@ -41,27 +36,10 @@ Groups with under 1% CPU and 100M memory are hidden in Apps, Background, macOS/S
 ## Flags
 
 - **orphan** — your process whose parent exited and that got adopted by launchd, init or `systemd --user`, while it doesn't look like an intentional daemon: the service manager didn't start it, it isn't a session leader, and either its process group leader is gone or it still holds a terminal
-- **stale** — an orphan alive longer than `staleOrphanAfterMin`, a zombie nobody reaped, or a job suspended with Ctrl+Z and forgotten
-- **runaway** — CPU above `runawayCpuPercent` for longer than `runawayAfterMin`
+- **stale** — an orphan alive longer than 30 minutes, or a zombie or a job suspended with Ctrl+Z left for more than 10 minutes
+- **runaway** — at least 80% CPU for longer than 10 minutes
 
 An orphan can still be doing useful work, for example a long job started in the background by a tool whose shell has exited. Check the command and directory before killing it
-
-The daemon reports `stale` and `runaway` once per process via desktop notifications (`notify-send` on Linux), including where the process came from, and appends them to `~/.local/state/whyslow/events.jsonl`
-
-## Config
-
-Optional `~/.config/whyslow/config.json`, all keys are optional:
-
-```json
-{
-  "staleOrphanAfterMin": 30,
-  "stuckAfterMin": 10,
-  "runawayCpuPercent": 80,
-  "runawayAfterMin": 10,
-  "daemonIntervalSec": 15,
-  "ignore": ["crashpad_handler", "chrome_crashpad_handler", "crashhelper"]
-}
-```
 
 ## Linux
 

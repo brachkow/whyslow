@@ -24,14 +24,6 @@ export const killProcesses = (pids: number[], signal: KillSignal): KillResult =>
   return result
 }
 
-export const isAlive = (pid: number) => {
-  try {
-    return process.kill(pid, 0)
-  } catch {
-    return false
-  }
-}
-
 // SIGCHLD tells a parent that a child finished, which prompts well-behaved programs to collect their zombies
 export const nudgeParent = (pid: number) => {
   try {

@@ -2,7 +2,6 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { exec, execOrThrow } from '../exec'
 import type { ProcessInfo } from '../types'
 import { describeLinuxProcess, isLinuxHelperPath, isLinuxSystemPath } from './linux-descriptions'
 import {
@@ -19,7 +18,7 @@ import {
   unitFileName,
 } from './linux-parse'
 import type { CgroupUnit } from './linux-parse'
-import type { DaemonControl, Platform, PlatformRules, ServiceInfo } from './types'
+import type { Platform, PlatformRules, ServiceInfo } from './types'
 
 // USER_HZ: /proc reports times in these ticks, fixed at 100 by the kernel ABI on mainstream architectures
 const CLOCK_TICKS = 100
@@ -260,51 +259,6 @@ export const createLinuxRules = (myUid: number): PlatformRules => ({
   },
 })
 
-const UNIT_NAME = 'whyslow.service'
-const unitFile = () => path.join(configHome(), 'systemd', 'user', UNIT_NAME)
-
-// ExecStart takes C-style quoted words; % and $ start specifiers and variables
-const quoteExecArgument = (value: string) =>
-  `"${value.replaceAll('\\', '\\\\').replaceAll('"', String.raw`\"`).replaceAll('%', '%%').replaceAll('$', '$$$$')}"`
-
-const buildUnit = (programArguments: string[]) => `[Unit]
-Description=whyslow: reports stale and runaway processes
-
-[Service]
-ExecStart=${programArguments.map(quoteExecArgument).join(' ')}
-Restart=on-failure
-
-[Install]
-WantedBy=default.target
-`
-
-const uninstall = async () => {
-  await exec('systemctl', ['--user', 'disable', '--now', UNIT_NAME])
-  await fs.rm(unitFile(), { force: true })
-  await exec('systemctl', ['--user', 'daemon-reload'])
-}
-
-const daemon: DaemonControl = {
-  install: async () => {
-    // Re-run the same way this process was started, so it works for the built bin and for tsx in development
-    const script = await fs.realpath(process.argv[1] ?? '')
-
-    await uninstall()
-    await fs.mkdir(path.dirname(unitFile()), { recursive: true })
-    await fs.writeFile(unitFile(), buildUnit([process.execPath, ...process.execArgv, script, 'daemon', 'run']))
-    await execOrThrow('systemctl', ['--user', 'daemon-reload'])
-    await execOrThrow('systemctl', ['--user', 'enable', '--now', UNIT_NAME])
-  },
-  uninstall,
-  pid: async () => {
-    const { stdout, exitCode } = await exec('systemctl', ['--user', 'show', '-p', 'MainPID', '--value', UNIT_NAME])
-    const pid = Number(stdout.trim())
-    return exitCode === 0 && pid > 0 ? pid : null
-  },
-  isInstalled: async () => fs.access(unitFile()).then(() => true, () => false),
-  logHint: `journalctl --user -u ${UNIT_NAME}`,
-}
-
 export const linux: Platform = {
   rules: createLinuxRules(process.getuid?.() ?? 0),
   readProcesses,
@@ -313,8 +267,4 @@ export const linux: Platform = {
   readCwds,
   readListeningPorts,
   readMemoryUsage,
-  notify: async (title, message) => {
-    await exec('notify-send', [title, message])
-  },
-  daemon,
 }

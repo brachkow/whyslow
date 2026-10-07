@@ -3,11 +3,10 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { exec, execOrThrow } from '../exec'
-import { DAEMON_LOG_FILE, STATE_DIR } from '../paths'
 import type { ProcessInfo } from '../types'
 import { describeMacosProcess, isMacosPath } from './darwin-descriptions'
 import { parseLaunchctlList, parseLsofCwd, parseLsofPorts, parsePsOutput, parseVmStatUsedBytes, STAT_FIELDS } from './darwin-parse'
-import type { AppInfo, DaemonControl, Platform, PlatformRules, ServiceInfo } from './types'
+import type { AppInfo, Platform, PlatformRules, ServiceInfo } from './types'
 
 // C locale keeps `%cpu` decimal separator a dot
 const env = { ...process.env, LC_ALL: 'C' }
@@ -158,66 +157,6 @@ export const darwinRules: PlatformRules = {
   },
 }
 
-const LAUNCH_AGENT_LABEL = 'dev.whyslow.daemon'
-const LAUNCH_AGENT_FILE = path.join(os.homedir(), 'Library', 'LaunchAgents', `${LAUNCH_AGENT_LABEL}.plist`)
-const LAUNCHCTL_PID_REGEX = /"PID" = (\d+);/
-
-const escapeXml = (value: string) =>
-  value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-
-const buildPlist = (programArguments: string[]) => `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>${LAUNCH_AGENT_LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-${programArguments.map(arg => `    <string>${escapeXml(arg)}</string>`).join('\n')}
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>ProcessType</key>
-  <string>Background</string>
-  <key>StandardOutPath</key>
-  <string>${escapeXml(DAEMON_LOG_FILE)}</string>
-  <key>StandardErrorPath</key>
-  <string>${escapeXml(DAEMON_LOG_FILE)}</string>
-</dict>
-</plist>
-`
-
-const domain = () => `gui/${process.getuid?.() ?? 0}`
-
-const uninstall = async () => {
-  await exec('launchctl', ['bootout', `${domain()}/${LAUNCH_AGENT_LABEL}`])
-  await fs.rm(LAUNCH_AGENT_FILE, { force: true })
-}
-
-const daemon: DaemonControl = {
-  install: async () => {
-    // Re-run the same way this process was started, so it works for the built bin and for tsx in development
-    const script = await fs.realpath(process.argv[1] ?? '')
-    const plist = buildPlist([process.execPath, ...process.execArgv, script, 'daemon', 'run'])
-
-    await uninstall()
-    await fs.mkdir(path.dirname(LAUNCH_AGENT_FILE), { recursive: true })
-    await fs.mkdir(STATE_DIR, { recursive: true })
-    await fs.writeFile(LAUNCH_AGENT_FILE, plist)
-    await execOrThrow('launchctl', ['bootstrap', domain(), LAUNCH_AGENT_FILE])
-  },
-  uninstall,
-  pid: async () => {
-    const result = await exec('launchctl', ['list', LAUNCH_AGENT_LABEL])
-    const pid = result.exitCode === 0 ? LAUNCHCTL_PID_REGEX.exec(result.stdout)?.[1] : undefined
-    return pid ? Number(pid) : null
-  },
-  isInstalled: async () => fs.access(LAUNCH_AGENT_FILE).then(() => true, () => false),
-  logHint: DAEMON_LOG_FILE,
-}
-
 export const darwin: Platform = {
   rules: darwinRules,
   readProcesses,
@@ -226,14 +165,4 @@ export const darwin: Platform = {
   readCwds,
   readListeningPorts,
   readMemoryUsage,
-  notify: async (title, message) => {
-    await exec('osascript', [
-      '-e', 'on run argv',
-      '-e', 'display notification (item 2 of argv) with title (item 1 of argv)',
-      '-e', 'end run',
-      title,
-      message,
-    ])
-  },
-  daemon,
 }

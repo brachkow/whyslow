@@ -23,7 +23,6 @@
   },
   "dependencies": {
     "@ink-tools/ink-mouse": "^2.1.0",
-    "dayjs": "^1.11.23",
     "ink": "^7.1.1",
     "ink-link": "^5.0.0",
     "react": "^19.3.0"

@@ -1,5 +1,5 @@
 import { formatDuration } from './format'
-import type { AnalyzedProcess, Config, Flag, ProcessInfo } from './types'
+import type { AnalyzedProcess, Flag, ProcessInfo, Thresholds } from './types'
 
 type Sample = {
   command: string
@@ -19,13 +19,22 @@ export type TrackerContext = {
   now: number
 }
 
+export const DEFAULT_THRESHOLDS: Thresholds = {
+  staleOrphanAfterMin: 30,
+  stuckAfterMin: 10,
+  runawayCpuPercent: 80,
+  runawayAfterMin: 10,
+  // Crash reporters intentionally detach from their app, they are not real orphans
+  ignore: ['crashpad_handler', 'chrome_crashpad_handler', 'crashhelper'],
+}
+
 // Dropping below this share of the threshold ends a runaway streak, so short dips don't reset it
 const RUNAWAY_HYSTERESIS = 0.75
 
 const isSameProcess = (sample: Sample, process: ProcessInfo) =>
   sample.command === process.command && sample.elapsedSec <= process.elapsedSec
 
-export const isOrphan = (process: ProcessInfo, context: TrackerContext, config: Config) =>
+export const isOrphan = (process: ProcessInfo, context: TrackerContext, config: Thresholds) =>
   process.pid !== context.selfPid
   && !context.adopterPids.has(process.pid)
   && context.adopterPids.has(process.ppid)
@@ -37,7 +46,7 @@ export const isOrphan = (process: ProcessInfo, context: TrackerContext, config: 
   && !context.managedPids.has(process.pid)
   && !config.ignore.includes(process.name)
 
-const staleReason = (process: ProcessInfo, orphan: boolean, parent: ProcessInfo | undefined, config: Config): string | null => {
+const staleReason = (process: ProcessInfo, orphan: boolean, parent: ProcessInfo | undefined, config: Thresholds): string | null => {
   const stuck = process.elapsedSec >= config.stuckAfterMin * 60
   if (process.stat.startsWith('Z') && stuck) {
     return `zombie, parent ${parent?.name ?? '?'} (${process.ppid}) never reaped it`
@@ -51,7 +60,7 @@ const staleReason = (process: ProcessInfo, orphan: boolean, parent: ProcessInfo 
   return null
 }
 
-export const createTracker = (config: Config) => {
+export const createTracker = (config: Thresholds = DEFAULT_THRESHOLDS) => {
   const samples = new Map<number, Sample>()
   const highCpuSince = new Map<number, number>()
 

@@ -38,14 +38,6 @@ export type MemoryUsage = {
   totalBytes: number
 }
 
-export type DaemonControl = {
-  install: () => Promise<void>
-  uninstall: () => Promise<void>
-  pid: () => Promise<number | null>
-  isInstalled: () => Promise<boolean>
-  logHint: string
-}
-
 export type Platform = {
   rules: PlatformRules
   readProcesses: () => Promise<ProcessInfo[]>
@@ -56,6 +48,4 @@ export type Platform = {
   readCwds: (processes: ProcessInfo[]) => Promise<Map<number, string>>
   readListeningPorts: (processes: ProcessInfo[]) => Promise<Map<number, number[]>>
   readMemoryUsage: () => Promise<MemoryUsage>
-  notify: (title: string, message: string) => Promise<void>
-  daemon: DaemonControl
 }

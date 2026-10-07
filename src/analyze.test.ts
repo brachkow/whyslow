@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { collectDescendants, createTracker } from './analyze'
-import { DEFAULT_CONFIG } from './config'
+import { collectDescendants, createTracker, DEFAULT_THRESHOLDS } from './analyze'
 import { makeProcess, MY_UID } from './test-factories'
 import type { ProcessInfo } from './types'
 
@@ -11,7 +10,7 @@ const MINUTE = 60
 const ADOPTERS = new Set([1])
 
 const analyzeOnce = (process: ProcessInfo, managedPids = new Set<number>(), adopterPids = ADOPTERS) =>
-  createTracker(DEFAULT_CONFIG).update([process], { myUid: MY_UID, managedPids, adopterPids, selfPid: 0, now: NOW })[0]
+  createTracker(DEFAULT_THRESHOLDS).update([process], { myUid: MY_UID, managedPids, adopterPids, selfPid: 0, now: NOW })[0]
 
 const getKinds = (process: ProcessInfo, managedPids?: Set<number>, adopterPids?: Set<number>) =>
   analyzeOnce(process, managedPids, adopterPids)?.flags.map(flag => flag.kind)
@@ -46,7 +45,7 @@ describe('orphan detection', () => {
 
   it('never flags whyslow itself', () => {
     const self = makeOrphan({ pid: 4242 })
-    const [result] = createTracker(DEFAULT_CONFIG).update([self], { myUid: MY_UID, managedPids: new Set(), adopterPids: ADOPTERS, selfPid: 4242, now: NOW })
+    const [result] = createTracker(DEFAULT_THRESHOLDS).update([self], { myUid: MY_UID, managedPids: new Set(), adopterPids: ADOPTERS, selfPid: 4242, now: NOW })
 
     expect(result?.flags).toEqual([])
   })
@@ -80,7 +79,7 @@ describe('stale detection', () => {
   it('marks a long-lived zombie stale and names its parent', () => {
     const parent = makeProcess({ pid: 42, name: 'node' })
     const zombie = makeProcess({ ppid: 42, stat: 'Z+', elapsedSec: 11 * MINUTE })
-    const [, analyzed] = createTracker(DEFAULT_CONFIG).update([parent, zombie], { myUid: MY_UID, managedPids: new Set(), adopterPids: ADOPTERS, selfPid: 0, now: NOW })
+    const [, analyzed] = createTracker(DEFAULT_THRESHOLDS).update([parent, zombie], { myUid: MY_UID, managedPids: new Set(), adopterPids: ADOPTERS, selfPid: 0, now: NOW })
 
     expect(analyzed?.flags).toEqual([{ kind: 'stale', reason: 'zombie, parent node (42) never reaped it' }])
   })
@@ -104,7 +103,7 @@ describe('runaway detection', () => {
   })
 
   it('flags sustained load observed across samples', () => {
-    const tracker = createTracker(DEFAULT_CONFIG)
+    const tracker = createTracker(DEFAULT_THRESHOLDS)
     const base = makeProcess({ elapsedSec: 60 * MINUTE, cpuTimeSec: 0 })
     const context = { myUid: MY_UID, managedPids: new Set<number>(), adopterPids: ADOPTERS, selfPid: 0 }
 
@@ -119,7 +118,7 @@ describe('runaway detection', () => {
   })
 
   it('measures CPU from cputime delta between samples', () => {
-    const tracker = createTracker(DEFAULT_CONFIG)
+    const tracker = createTracker(DEFAULT_THRESHOLDS)
     const base = makeProcess({ cpuTimeSec: 10, psCpuPercent: 3 })
     const context = { myUid: MY_UID, managedPids: new Set<number>(), adopterPids: ADOPTERS, selfPid: 0 }
 
@@ -130,7 +129,7 @@ describe('runaway detection', () => {
   })
 
   it('resets history when a pid is reused by another program', () => {
-    const tracker = createTracker(DEFAULT_CONFIG)
+    const tracker = createTracker(DEFAULT_THRESHOLDS)
     const base = makeProcess({ cpuTimeSec: 1000, psCpuPercent: 7 })
     const context = { myUid: MY_UID, managedPids: new Set<number>(), adopterPids: ADOPTERS, selfPid: 0 }
 
